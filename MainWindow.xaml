@@ -1,0 +1,46 @@
+<Window
+    x:Class="ToolTipTest.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="ToolTip Repro"
+    Width="420"
+    Height="320">
+    <Window.Resources>
+        <!-- A deliberately self-contained template. This separates a broken Fluent
+             theme template from a broken Popup/portable text rendering path. -->
+        <Style x:Key="ProbeToolTipStyle" TargetType="ToolTip">
+            <Setter Property="Foreground" Value="Red" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="BorderBrush" Value="Blue" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Padding" Value="8" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToolTip">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}">
+                            <TextBlock Text="{TemplateBinding Content}"
+                                       Foreground="{TemplateBinding Foreground}"
+                                       FontSize="16" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <StackPanel Margin="16">
+        <TextBlock x:Name="StatusText" Margin="0,0,0,12" Text="Hover the button below. Status will update here if ToolTipOpening fires." TextWrapping="Wrap" />
+
+        <ToolBar>
+            <Button x:Name="PlainButton" Content="Plain Button" ToolTip="Plain button tooltip text" />
+            <Separator />
+            <Button x:Name="ServiceButton" Content="Service Button" />
+        </ToolBar>
+
+        <Button x:Name="ForceShowButton" Margin="0,16,0,0" Content="Force-show tooltip via code" Click="OnForceShowClick" />
+        <Button x:Name="ForcePopupButton" Margin="0,8,0,0" Content="Force-show raw Popup" Click="OnForcePopupClick" />
+        <Button x:Name="ProbeButton" Margin="0,8,0,0" Content="Probe explicit ToolTip template" />
+    </StackPanel>
+</Window>
