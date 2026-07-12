@@ -343,6 +343,14 @@ public partial class MainWindow : Window
 
     void OnRecentFilesSubmenuOpened(object sender, RoutedEventArgs e)
     {
+        // SubmenuOpened is a bubbling routed event, so a descendant submenu opening (e.g. the
+        // nested Workspaces flyout) also raises this handler. Only rebuild when *this* menu item's
+        // own submenu opened - rebuilding on a descendant's open would recreate the very item the
+        // user just hovered, on every open, in an endless loop (real WPF menu services guard the
+        // same way).
+        if (!ReferenceEquals(e.OriginalSource, RecentFilesMenuItem))
+            return;
+
         nestedSubmenuOpened = true;
         RebuildRecentFilesSubmenu();
         Point screenPoint = RecentFilesMenuItem.PointToScreen(new Point(0, 0));
