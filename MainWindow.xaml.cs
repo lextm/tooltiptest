@@ -3,12 +3,22 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
+using System.Windows.Automation;
 
 namespace ToolTipTest;
 
 public partial class MainWindow : Window
 {
     Popup? rawPopup;
+    bool expectingSubmenuClose;
+    bool submenuPrematureClose;
+    bool nestedSubmenuOpened;
+    bool nestedSubmenuPrematureClose;
+    bool lazySubmenuRebuilt;
+    MenuItem? recentWorkspacesMenuItem;
+    bool comboPrematureClose;
+    bool isVerifying;
+    readonly bool hoverMode = Environment.GetEnvironmentVariable("TOOLTIPTEST_HOVER_MODE") == "1";
 
     public MainWindow()
     {
@@ -40,6 +50,25 @@ public partial class MainWindow : Window
         Loaded += (s, e) =>
         {
             Log("MainWindow.Loaded fired");
+            if (hoverMode)
+            {
+                Activate();
+                var hoverReadyTimer = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromSeconds(1)
+                };
+                hoverReadyTimer.Tick += (ts, te) =>
+                {
+                    hoverReadyTimer.Stop();
+                    MainMenu.Focus();
+                    FileMenuItem.IsSubmenuOpen = true;
+                    Log("HOVER_STEP File menu opened by test setup");
+                    StartHoverModeVerificationTimer();
+                };
+                hoverReadyTimer.Start();
+                return;
+            }
+
             var timer = new System.Windows.Threading.DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(2.5)
@@ -92,7 +121,113 @@ public partial class MainWindow : Window
                 }
             };
             probeTimer.Start();
+
+            var menuTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(10)
+            };
+            menuTimer.Tick += (ts, te) =>
+            {
+                menuTimer.Stop();
+                Log("Auto-open timer fired; opening main File menu Popup");
+                MainMenu.Focus();
+                FileMenuItem.IsSubmenuOpen = true;
+            };
+            menuTimer.Start();
+
+            var recentFilesTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(11)
+            };
+            recentFilesTimer.Tick += (ts, te) =>
+            {
+                recentFilesTimer.Stop();
+                Log("Auto-open timer fired; opening File > Recent Files submenu");
+                RecentFilesMenuItem.IsSubmenuOpen = true;
+            };
+            recentFilesTimer.Start();
+
+            var recentWorkspacesTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(12)
+            };
+            recentWorkspacesTimer.Tick += (ts, te) =>
+            {
+                recentWorkspacesTimer.Stop();
+                Log("Auto-open timer fired; opening File > Recent Files > Workspaces submenu");
+                if (recentWorkspacesMenuItem != null)
+                    recentWorkspacesMenuItem.IsSubmenuOpen = true;
+                else
+                    Log("File > Recent Files > Workspaces submenu is not available after lazy rebuild");
+            };
+            recentWorkspacesTimer.Start();
+
+            var comboTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(13)
+            };
+            comboTimer.Tick += (ts, te) =>
+            {
+                comboTimer.Stop();
+                expectingSubmenuClose = true;
+                if (recentWorkspacesMenuItem != null)
+                    recentWorkspacesMenuItem.IsSubmenuOpen = false;
+                RecentFilesMenuItem.IsSubmenuOpen = false;
+                FileMenuItem.IsSubmenuOpen = false;
+                Log("Auto-open timer fired; opening toolbar ComboBox dropdown");
+                ToolbarComboBox.Focus();
+                ToolbarComboBox.IsDropDownOpen = true;
+            };
+            comboTimer.Start();
+
+            var verifyTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(16)
+            };
+            verifyTimer.Tick += (ts, te) =>
+            {
+                verifyTimer.Stop();
+                isVerifying = true;
+                bool pass = nestedSubmenuOpened &&
+                    lazySubmenuRebuilt &&
+                    !submenuPrematureClose &&
+                    !nestedSubmenuPrematureClose &&
+                    !comboPrematureClose;
+                Log("RESULT: " + (pass ? "PASS" : "FAIL") +
+                    " nestedSubmenuOpened=" + nestedSubmenuOpened +
+                    " lazySubmenuRebuilt=" + lazySubmenuRebuilt +
+                    " submenuPrematureClose=" + submenuPrematureClose +
+                    " nestedSubmenuPrematureClose=" + nestedSubmenuPrematureClose +
+                    " comboPrematureClose=" + comboPrematureClose);
+                Application.Current.Shutdown();
+            };
+            verifyTimer.Start();
         };
+    }
+
+    void StartHoverModeVerificationTimer()
+    {
+        var verifyTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(18)
+        };
+        verifyTimer.Tick += (ts, te) =>
+        {
+            verifyTimer.Stop();
+            isVerifying = true;
+            bool pass = nestedSubmenuOpened &&
+                lazySubmenuRebuilt &&
+                !submenuPrematureClose &&
+                !nestedSubmenuPrematureClose;
+            Log("RESULT: " + (pass ? "PASS" : "FAIL") +
+                " mode=hover" +
+                " nestedSubmenuOpened=" + nestedSubmenuOpened +
+                " lazySubmenuRebuilt=" + lazySubmenuRebuilt +
+                " submenuPrematureClose=" + submenuPrematureClose +
+                " nestedSubmenuPrematureClose=" + nestedSubmenuPrematureClose);
+            Application.Current.Shutdown();
+        };
+        verifyTimer.Start();
     }
 
     void Log(string message)
@@ -174,5 +309,131 @@ public partial class MainWindow : Window
         };
         rawPopup.IsOpen = true;
         Log("Raw Popup.IsOpen set to true; actual IsOpen=" + rawPopup.IsOpen);
+    }
+
+    void OnFileSubmenuOpened(object sender, RoutedEventArgs e)
+    {
+        Point screenPoint = FileMenuItem.PointToScreen(new Point(0, 0));
+        Log("Main File menu SubmenuOpened fired; IsSubmenuOpen=" + FileMenuItem.IsSubmenuOpen +
+            $" targetScreen={screenPoint.X},{screenPoint.Y}");
+    }
+
+    void OnFileSubmenuClosed(object sender, RoutedEventArgs e)
+    {
+        if (!expectingSubmenuClose && !isVerifying)
+        {
+            submenuPrematureClose = true;
+            Log("Main File menu SubmenuClosed fired UNEXPECTEDLY (premature dismissal)");
+        }
+        else
+        {
+            Log("Main File menu SubmenuClosed fired (expected)");
+        }
+    }
+
+    void OnNewSubmenuOpened(object sender, RoutedEventArgs e)
+    {
+        Log("File > New SubmenuOpened fired; IsSubmenuOpen=" + NewMenuItem.IsSubmenuOpen);
+    }
+
+    void OnNewSubmenuClosed(object sender, RoutedEventArgs e)
+    {
+        Log("File > New SubmenuClosed fired");
+    }
+
+    void OnRecentFilesSubmenuOpened(object sender, RoutedEventArgs e)
+    {
+        nestedSubmenuOpened = true;
+        RebuildRecentFilesSubmenu();
+        Point screenPoint = RecentFilesMenuItem.PointToScreen(new Point(0, 0));
+        Log("File > Recent Files SubmenuOpened fired; IsSubmenuOpen=" + RecentFilesMenuItem.IsSubmenuOpen +
+            $" targetScreen={screenPoint.X},{screenPoint.Y}");
+    }
+
+    void RebuildRecentFilesSubmenu()
+    {
+        // Matches OpenDevelop's MenuService.ReplaceMenuItems() pattern: a submenu
+        // opens with a dummy child, then clears and inserts real menu items.
+        RecentFilesMenuItem.Items.Clear();
+        RecentFilesMenuItem.Items.Add(new MenuItem { Header = "Sample.xaml" });
+        RecentFilesMenuItem.Items.Add(new MenuItem { Header = "PopupNotes.txt" });
+        RecentFilesMenuItem.Items.Add(new Separator());
+
+        recentWorkspacesMenuItem = new MenuItem { Header = "_Workspaces" };
+        AutomationProperties.SetAutomationId(recentWorkspacesMenuItem, "RecentWorkspacesMenuItem");
+        recentWorkspacesMenuItem.SubmenuOpened += OnRecentWorkspacesSubmenuOpened;
+        recentWorkspacesMenuItem.SubmenuClosed += OnRecentWorkspacesSubmenuClosed;
+        recentWorkspacesMenuItem.Items.Add(new MenuItem { Header = "LibreWPF Debugging" });
+        recentWorkspacesMenuItem.Items.Add(new MenuItem { Header = "OpenDevelop Layout" });
+        RecentFilesMenuItem.Items.Add(recentWorkspacesMenuItem);
+
+        lazySubmenuRebuilt = true;
+        Log("File > Recent Files lazy submenu rebuilt; childCount=" + RecentFilesMenuItem.Items.Count);
+    }
+
+    void OnRecentFilesSubmenuClosed(object sender, RoutedEventArgs e)
+    {
+        if (!expectingSubmenuClose && !isVerifying)
+        {
+            nestedSubmenuPrematureClose = true;
+            Log("File > Recent Files SubmenuClosed fired UNEXPECTEDLY (premature dismissal)");
+        }
+        else
+        {
+            Log("File > Recent Files SubmenuClosed fired (expected)");
+        }
+    }
+
+    void OnRecentWorkspacesSubmenuOpened(object sender, RoutedEventArgs e)
+    {
+        nestedSubmenuOpened = true;
+        if (recentWorkspacesMenuItem == null)
+        {
+            Log("File > Recent Files > Workspaces SubmenuOpened fired without a tracked menu item");
+            return;
+        }
+
+        Point screenPoint = recentWorkspacesMenuItem.PointToScreen(new Point(0, 0));
+        Log("File > Recent Files > Workspaces SubmenuOpened fired; IsSubmenuOpen=" +
+            recentWorkspacesMenuItem.IsSubmenuOpen +
+            $" targetScreen={screenPoint.X},{screenPoint.Y}");
+    }
+
+    void OnRecentWorkspacesSubmenuClosed(object sender, RoutedEventArgs e)
+    {
+        if (!expectingSubmenuClose && !isVerifying)
+        {
+            nestedSubmenuPrematureClose = true;
+            Log("File > Recent Files > Workspaces SubmenuClosed fired UNEXPECTEDLY (premature dismissal)");
+        }
+        else
+        {
+            Log("File > Recent Files > Workspaces SubmenuClosed fired (expected)");
+        }
+    }
+
+    void OnToolbarComboBoxDropDownOpened(object sender, EventArgs e)
+    {
+        Point screenPoint = ToolbarComboBox.PointToScreen(new Point(0, 0));
+        Log("Toolbar ComboBox DropDownOpened fired; IsDropDownOpen=" + ToolbarComboBox.IsDropDownOpen +
+            $" targetScreen={screenPoint.X},{screenPoint.Y}");
+    }
+
+    void OnToolbarComboBoxDropDownClosed(object sender, EventArgs e)
+    {
+        // Nothing in this test intentionally closes the ComboBox dropdown before
+        // verification runs, so a close event observed before then means it was
+        // dismissed prematurely (e.g. by a spurious host-window move releasing mouse
+        // capture). Once isVerifying is set, app-shutdown window teardown itself
+        // closes the dropdown - that's not a bug.
+        if (!isVerifying)
+        {
+            comboPrematureClose = true;
+            Log("Toolbar ComboBox DropDownClosed fired UNEXPECTEDLY (premature dismissal)");
+        }
+        else
+        {
+            Log("Toolbar ComboBox DropDownClosed fired (shutdown teardown)");
+        }
     }
 }
