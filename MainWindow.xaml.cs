@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -9,6 +10,9 @@ using System.Windows.Automation;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Shapes;
+using AvalonDock;
+using AvalonDock.Controls;
+using AvalonDock.Layout;
 
 namespace ToolTipTest;
 
@@ -26,6 +30,8 @@ public partial class MainWindow : Window
     readonly bool hoverMode = Environment.GetEnvironmentVariable("TOOLTIPTEST_HOVER_MODE") == "1";
     readonly bool imageMode = Environment.GetEnvironmentVariable("TOOLTIPTEST_IMAGE_MODE") == "1";
     readonly bool splitterMode = Environment.GetEnvironmentVariable("TOOLTIPTEST_SPLITTER_MODE") == "1";
+    readonly bool avalonDockFloatMode = Environment.GetEnvironmentVariable("TOOLTIPTEST_AVALONDOCK_FLOAT_MODE") == "1";
+    readonly bool avalonDockDockMode = Environment.GetEnvironmentVariable("TOOLTIPTEST_AVALONDOCK_DOCK_MODE") == "1";
     Image? bitmapImageProbe;
     Image? vectorImageProbe;
     Rectangle? drawingBrushProbe;
@@ -33,6 +39,18 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        if (avalonDockFloatMode)
+        {
+            ConfigureAvalonDockFloatMode();
+            return;
+        }
+
+        if (avalonDockDockMode)
+        {
+            ConfigureAvalonDockDockMode();
+            return;
+        }
 
         if (imageMode)
         {
@@ -225,6 +243,291 @@ public partial class MainWindow : Window
             };
             verifyTimer.Start();
         };
+    }
+
+    void ConfigureAvalonDockFloatMode()
+    {
+        Title = "ToolTipTest AvalonDock Float Drag Probe";
+        Width = 800;
+        Height = 560;
+        Left = 100;
+        Top = 100;
+        WindowStartupLocation = WindowStartupLocation.Manual;
+
+        var tool = new LayoutAnchorable
+        {
+            Title = "Float Drag Tool",
+            ContentId = "floatDragTool",
+            CanClose = false,
+            CanHide = true,
+            Content = new TextBlock { Text = "Float Drag Tool", HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+        };
+        var toolPane = new LayoutAnchorablePane(tool) { DockWidth = new GridLength(240) };
+        var documentPane = new LayoutDocumentPane();
+        documentPane.Children.Add(new LayoutDocument
+        {
+            Title = "Float Drag Document",
+            ContentId = "floatDragDocument",
+            Content = new Grid { Background = Brushes.White }
+        });
+        var manager = new DockingManager
+        {
+            Layout = new LayoutRoot
+            {
+                RootPanel = new LayoutPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Children = { toolPane, documentPane }
+                }
+            }
+        };
+        AutomationProperties.SetAutomationId(manager, "FloatDragManager");
+
+        PreviewMouseDown += (s, e) => Log($"FLOAT PreviewDown pos={Fmt(e.GetPosition(this))} src={e.OriginalSource?.GetType().Name} captured={CapturedName()}");
+        PreviewMouseMove += (s, e) =>
+        {
+            if (e.LeftButton == MouseButtonState.Pressed)
+                Log($"FLOAT PreviewMove pos={Fmt(e.GetPosition(this))} src={e.OriginalSource?.GetType().Name} captured={CapturedName()}");
+        };
+        PreviewMouseUp += (s, e) => Log($"FLOAT PreviewUp pos={Fmt(e.GetPosition(this))} src={e.OriginalSource?.GetType().Name} captured={CapturedName()}");
+        Content = manager;
+
+        Loaded += (s, e) => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            manager.UpdateLayout();
+            var title = FindVisualDescendant<AnchorablePaneTitle>(manager, x => ReferenceEquals(x.Model, tool));
+            if (title == null)
+            {
+                Log("FLOAT_RESULT: FAIL reason=title-not-found");
+                return;
+            }
+
+            AutomationProperties.SetAutomationId(title, "FloatDragTitle");
+            var topLeft = title.PointToScreen(new Point());
+            Log($"FLOAT_MODE_READY x={topLeft.X:0.0} y={topLeft.Y:0.0} width={title.ActualWidth:0.0} height={title.ActualHeight:0.0}");
+
+            System.Windows.Threading.DispatcherTimer? timer = null;
+            title.PreviewMouseDown += (ts, te) =>
+            {
+                if (timer != null)
+                    return;
+                var ticks = 0;
+                timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+                timer.Tick += (timerSender, timerArgs) =>
+                {
+                    ticks++;
+                    if (manager.FloatingWindows.Any())
+                    {
+                        var floating = manager.FloatingWindows.First();
+                        var screenOrigin = floating.PointToScreen(new Point());
+                        var source = PresentationSource.FromVisual(floating);
+                        var toDevice = source?.CompositionTarget?.TransformToDevice ?? Matrix.Identity;
+                        var sourceReady = floating.IsVisible && source != null &&
+                            (Math.Abs(floating.Left) > 0.1 || Math.Abs(floating.Top) > 0.1);
+                        if (!sourceReady && ticks < 80)
+                            return;
+                        var coordinatesMatch = Math.Abs(screenOrigin.X - floating.Left) <= 2 &&
+                            Math.Abs(screenOrigin.Y - floating.Top) <= 2;
+                        timer.Stop();
+                        Log($"FLOAT_COORDINATES window={floating.Left:0.0},{floating.Top:0.0} pointToScreen={screenOrigin.X:0.0},{screenOrigin.Y:0.0} compatibilityTargetScale={toDevice.M11:0.0},{toDevice.M22:0.0}");
+                        Log($"FLOAT_RESULT: {(coordinatesMatch ? "PASS" : "FAIL")} floatingWindows={manager.FloatingWindows.Count()} isFloating={tool.IsFloating} coordinatesMatch={coordinatesMatch}");
+                    }
+                    else if (ticks >= 80)
+                    {
+                        timer.Stop();
+                        Log($"FLOAT_RESULT: FAIL floatingWindows=0 isFloating={tool.IsFloating}");
+                    }
+                };
+                timer.Start();
+            };
+        }));
+    }
+
+    static void DumpDescendantTypes(DependencyObject root, System.Collections.Generic.List<string> acc, int depth)
+    {
+        if (depth > 40) return;
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            acc.Add(child.GetType().Name);
+            DumpDescendantTypes(child, acc, depth + 1);
+        }
+    }
+
+    static T? FindVisualDescendant<T>(DependencyObject root, Func<T, bool> predicate) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match && predicate(match))
+                return match;
+            var nested = FindVisualDescendant(child, predicate);
+            if (nested != null)
+                return nested;
+        }
+        return null;
+    }
+
+    // ---- AvalonDock re-dock via drop target (TOOLTIPTEST_AVALONDOCK_DOCK_MODE=1) ----------------
+    // The reverse of the tear-out float: a floating tool window is dragged over the main DockingManager,
+    // whose OverlayWindow shows drop indicators; releasing on one re-docks the pane. On LibreWPF this
+    // exercises: (a) the transient overlay/drop-target windows shown mid-drag (same family as the
+    // splitter/float overlay bug), and (b) LayoutFloatingWindowControl's drag engine, which upstream is
+    // driven by Win32 WM_MOVING/WM_EXITSIZEMOVE + an HwndSource hook - neither of which exists on the
+    // portable PresentationSource, so this is expected to surface the porting gap until that drag path
+    // is adapted. The harness starts with the tool already floating and drives a drop onto the document
+    // pane center, then reports whether the pane re-docked (DOCK_RESULT: PASS/FAIL).
+    LayoutDocumentPane? dockDocumentPane;
+    LayoutAnchorable? dockTool;
+    DockingManager? dockManager;
+    Grid? dockDocumentContent;
+
+    void ConfigureAvalonDockDockMode()
+    {
+        Title = "ToolTipTest AvalonDock Re-Dock Probe";
+        Width = 900;
+        Height = 620;
+        Left = 100;
+        Top = 100;
+        WindowStartupLocation = WindowStartupLocation.Manual;
+
+        dockTool = new LayoutAnchorable
+        {
+            Title = "Dock Tool",
+            ContentId = "dockTool",
+            CanClose = false,
+            CanHide = true,
+            Content = new TextBlock { Text = "Dock Tool", HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+        };
+        var toolPane = new LayoutAnchorablePane(dockTool) { DockWidth = new GridLength(220) };
+        dockDocumentContent = new Grid { Background = Brushes.White };
+        dockDocumentPane = new LayoutDocumentPane();
+        dockDocumentPane.Children.Add(new LayoutDocument
+        {
+            Title = "Dock Document",
+            ContentId = "dockDocument",
+            Content = dockDocumentContent
+        });
+        dockManager = new DockingManager
+        {
+            Layout = new LayoutRoot
+            {
+                RootPanel = new LayoutPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Children = { toolPane, dockDocumentPane }
+                }
+            }
+        };
+        AutomationProperties.SetAutomationId(dockManager, "DockManager");
+
+        PreviewMouseDown += (s, e) => Log($"DOCK PreviewDown pos={Fmt(e.GetPosition(this))} src={e.OriginalSource?.GetType().Name} captured={CapturedName()}");
+        PreviewMouseMove += (s, e) =>
+        {
+            if (e.LeftButton == MouseButtonState.Pressed)
+                Log($"DOCK PreviewMove pos={Fmt(e.GetPosition(this))} src={e.OriginalSource?.GetType().Name} captured={CapturedName()}");
+        };
+        PreviewMouseUp += (s, e) => Log($"DOCK PreviewUp pos={Fmt(e.GetPosition(this))} src={e.OriginalSource?.GetType().Name} captured={CapturedName()}");
+        Content = dockManager;
+
+        Loaded += (s, e) => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            dockManager.UpdateLayout();
+
+            // Start with the tool floating: this is the state whose re-dock we want to test. Float()
+            // reparents the anchorable into a floating window; give the layout a beat to realize it.
+            dockTool.Float();
+            // Delay readiness so the per-window DPI scale has settled before we capture the drop-target
+            // screen coordinates (they must match the scale DevFlow resolves at drag time).
+            var settle = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(800) };
+            settle.Tick += (ts, te) => { settle.Stop(); SetupDockDrop(); };
+            settle.Start();
+        }), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    void SetupDockDrop()
+    {
+        if (dockManager == null || dockTool == null || dockDocumentPane == null)
+        {
+            Log("DOCK_RESULT: FAIL reason=setup-null");
+            return;
+        }
+
+        dockManager.UpdateLayout();
+
+        var floating = dockManager.FloatingWindows.FirstOrDefault();
+        if (floating == null)
+        {
+            Log($"DOCK_RESULT: FAIL reason=no-floating-window isFloating={dockTool.IsFloating}");
+            return;
+        }
+
+        // Float() may place the floating window under the macOS menu bar or behind the main window
+        // (they fully overlap, so it's occluded and unclickable). Move it clear to the RIGHT of the
+        // main window (which spans x 100..1000) so its caption is an unobstructed drag target, and
+        // mark it topmost so it stays clickable.
+        floating.Left = 1080;
+        floating.Top = 220;
+        floating.Topmost = true;
+        floating.UpdateLayout();
+
+        // The floating window's own title bar is the drag handle that moves the window (and drives the
+        // drop-target engine). Fall back to the pane title inside it if the caption isn't found.
+        // The floating window's caption is templated (Grid/Border + DropDownControlArea), not an
+        // AnchorablePaneTitle. Upstream the caption drag is a Win32 gesture (AttachDrag sends
+        // WM_NCLBUTTONDOWN/HT_CAPTION, then WM_MOVING drives DragService, WM_EXITSIZEMOVE drops) - none
+        // of which exists on LibreWPF's portable window, so today no managed element starts the drag.
+        // We target the caption's DropDownControlArea as the intended drag handle so this harness is
+        // ready to pass once the floating-window drag engine is wired to portable window-move events.
+        FrameworkElement? dragHandle =
+            FindVisualDescendant<AnchorablePaneTitle>(floating, _ => true) as FrameworkElement
+            ?? FindVisualDescendant<DropDownControlArea>(floating, _ => true);
+        if (dragHandle == null)
+        {
+            var types = new System.Collections.Generic.List<string>();
+            DumpDescendantTypes(floating, types, 0);
+            Log("DOCK diag descendants: " + string.Join(", ", types.Distinct().Take(40)));
+            Log("DOCK_RESULT: FAIL reason=drag-handle-not-found");
+            return;
+        }
+        AutomationProperties.SetAutomationId(dragHandle, "DockDragTitle");
+
+        // Drop point for the "dock inside" indicator: horizontally at the document pane center, but
+        // vertically at the content-area center (above the pane's geometric center by half the tab
+        // strip). Take X from the pane control and Y from the content element. The drag is driven as a
+        // delta (dx/dy) from the handle - a delta is invariant to any absolute screen-scale offset, so
+        // it lands correctly as long as handle and target share this PointToScreen space.
+        var paneControl = FindVisualDescendant<LayoutDocumentPaneControl>(dockManager, _ => true) as FrameworkElement
+            ?? dockManager;
+        var content = (FrameworkElement?)dockDocumentContent ?? paneControl;
+        var paneCenter = paneControl.PointToScreen(new Point(paneControl.ActualWidth / 2d, paneControl.ActualHeight / 2d));
+        var contentCenter = content.PointToScreen(new Point(content.ActualWidth / 2d, content.ActualHeight / 2d));
+        var docCenterScreen = new Point(paneCenter.X, contentCenter.Y);
+        var handleScreen = dragHandle.PointToScreen(new Point(dragHandle.ActualWidth / 2d, dragHandle.ActualHeight / 2d));
+
+        Log($"DOCK_MODE_READY handleX={handleScreen.X:0.0} handleY={handleScreen.Y:0.0} " +
+            $"targetX={docCenterScreen.X:0.0} targetY={docCenterScreen.Y:0.0} " +
+            $"floatingWindows={dockManager.FloatingWindows.Count()} isFloating={dockTool.IsFloating}");
+
+        // Poll for re-dock: the tool leaves the floating state and rejoins a docked pane.
+        var ticks = 0;
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        timer.Tick += (s, e) =>
+        {
+            ticks++;
+            var docked = !dockTool.IsFloating && !dockManager.FloatingWindows.Any();
+            if (docked)
+            {
+                timer.Stop();
+                Log($"DOCK_RESULT: PASS floatingWindows={dockManager.FloatingWindows.Count()} isFloating={dockTool.IsFloating}");
+            }
+            else if (ticks >= 80)
+            {
+                timer.Stop();
+                Log($"DOCK_RESULT: FAIL floatingWindows={dockManager.FloatingWindows.Count()} isFloating={dockTool.IsFloating}");
+            }
+        };
+        timer.Start();
     }
 
     void ConfigureImageMode()

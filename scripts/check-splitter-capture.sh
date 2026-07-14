@@ -13,7 +13,10 @@ LOG_FILE="/tmp/tooltiptest_debug.log"
 rm -f "$LOG_FILE"
 
 echo "Building and running tooltiptest (splitter mode with DevFlow)..."
-TOOLTIPTEST_SPLITTER_MODE=1 TOOLTIPTEST_DEVFLOW=1 dotnet run --project "$PROJECT_DIR" -c Debug > /tmp/tooltiptest_stdout.log 2>&1 &
+# Use the in-window adorner ghost, which is exactly what the real AvalonDock LayoutGridControl uses
+# (LayoutGridResizerGhostAdorner via the adorner layer). The separate-overlay-window modes remain as
+# opt-in stress tests, but they do NOT reflect the real splitter and break mouse-up on macOS/GLFW.
+TOOLTIPTEST_SPLITTER_MODE=1 TOOLTIPTEST_SPLITTER_ADORNER=1 TOOLTIPTEST_DEVFLOW=1 dotnet run --project "$PROJECT_DIR" -c Debug > /tmp/tooltiptest_stdout.log 2>&1 &
 RUN_PID=$!
 trap 'kill "$RUN_PID" 2>/dev/null || true' EXIT
 
@@ -22,7 +25,7 @@ READY_LINE=""
 for i in $(seq 1 90); do
     if [ -f "$LOG_FILE" ]; then
         READY_LINE="$(grep -m1 "SPLIT_MODE_READY" "$LOG_FILE" || true)"
-        if [ -n "$READY_LINE" ] && curl -fsS http://127.0.0.1:9523/api/v1/health >/dev/null 2>&1; then
+        if [ -n "$READY_LINE" ] && curl -fsS http://127.0.0.1:9523/api/v1/agent/status >/dev/null 2>&1; then
             break
         fi
     fi
