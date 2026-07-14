@@ -65,7 +65,7 @@
             </MenuItem>
         </Menu>
 
-        <StackPanel>
+        <StackPanel x:Name="RootStackPanel">
         <TextBlock x:Name="StatusText" Margin="0,0,0,12" Text="Hover the button below. Status will update here if ToolTipOpening fires." TextWrapping="Wrap" />
 
         <ToolBar x:Name="MainToolBar">

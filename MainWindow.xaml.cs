@@ -32,6 +32,7 @@ public partial class MainWindow : Window
     readonly bool splitterMode = Environment.GetEnvironmentVariable("TOOLTIPTEST_SPLITTER_MODE") == "1";
     readonly bool avalonDockFloatMode = Environment.GetEnvironmentVariable("TOOLTIPTEST_AVALONDOCK_FLOAT_MODE") == "1";
     readonly bool avalonDockDockMode = Environment.GetEnvironmentVariable("TOOLTIPTEST_AVALONDOCK_DOCK_MODE") == "1";
+    readonly bool comboPopupMode = Environment.GetEnvironmentVariable("TOOLTIPTEST_COMBO_POPUP_MODE") == "1";
     Image? bitmapImageProbe;
     Image? vectorImageProbe;
     Rectangle? drawingBrushProbe;
@@ -61,6 +62,12 @@ public partial class MainWindow : Window
         if (splitterMode)
         {
             ConfigureSplitterMode();
+            return;
+        }
+
+        if (comboPopupMode)
+        {
+            ConfigureComboPopupMode();
             return;
         }
 
@@ -341,6 +348,159 @@ public partial class MainWindow : Window
                 timer.Start();
             };
         }));
+    }
+
+    // ---- Combo popup positioning probe (TOOLTIPTEST_COMBO_POPUP_MODE=1) --------------------------
+    // Reported bug: OpenDevelop's toolbar ComboBox dropdown popup appears in the correct location,
+    // but the class/member combo box above the code editor - which is nested inside AvalonDock's
+    // docking chrome (DockingManager -> LayoutDocumentPane -> document content), rather than sitting
+    // directly in the top-level window content like the toolbar - opens its popup far from the combo
+    // box. This builds both shapes side by side in one window: ToolbarComboBox (already in XAML, at
+    // top-level) and a second combo nested inside a DockingManager's document content (mimicking
+    // QuickClassBrowser's own nesting depth), then opens each dropdown in turn and logs the popup's
+    // actual screen position against the combo's own screen position, so the offset is directly
+    // comparable between the two shapes.
+    void ConfigureComboPopupMode()
+    {
+        Title = "ToolTipTest Combo Popup Position Probe";
+        Width = 700;
+        Height = 520;
+
+        var documentComboBox = new ComboBox { Width = 160, SelectedIndex = 0 };
+        documentComboBox.Items.Add(new ComboBoxItem { Content = "Obfuscar.Program" });
+        documentComboBox.Items.Add(new ComboBoxItem { Content = "Obfuscar.Options" });
+        documentComboBox.Items.Add(new ComboBoxItem { Content = "Obfuscar.Helper" });
+        AutomationProperties.SetAutomationId(documentComboBox, "DocumentComboBox");
+        documentComboBox.DropDownOpened += (s, e) => LogComboPopupPosition(documentComboBox, "Document");
+
+        var browserBar = new Grid { Background = Brushes.WhiteSmoke, Height = 26 };
+        browserBar.Children.Add(documentComboBox);
+
+        var editorGrid = new Grid();
+        editorGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        editorGrid.RowDefinitions.Add(new RowDefinition());
+        Grid.SetRow(browserBar, 0);
+        editorGrid.Children.Add(browserBar);
+        var placeholder = new TextBlock { Text = "// code editor placeholder", Margin = new Thickness(8) };
+        Grid.SetRow(placeholder, 1);
+        editorGrid.Children.Add(placeholder);
+
+        var documentPane = new LayoutDocumentPane();
+        documentPane.Children.Add(new LayoutDocument
+        {
+            Title = "Program.cs",
+            ContentId = "comboProbeDocument",
+            Content = editorGrid
+        });
+
+        var manager = new DockingManager
+        {
+            Height = 320,
+            Layout = new LayoutRoot { RootPanel = new LayoutPanel { Children = { documentPane } } }
+        };
+        AutomationProperties.SetAutomationId(manager, "ComboProbeManager");
+
+        RootStackPanel.Children.Add(manager);
+
+        AutomationProperties.SetAutomationId(ToolbarComboBox, "ToolbarComboBox");
+        ToolbarComboBox.DropDownOpened += (s, e) => LogComboPopupPosition(ToolbarComboBox, "Toolbar");
+
+        // Reported symptom is intermittent ("some randomness") on BOTH combos, not just the nested
+        // one - so a single open/close of each proves little either way. Cycle each combo open/closed
+        // many times (with the document combo only started once AvalonDock has actually realized it
+        // into the live visual tree - a fixed delay isn't reliable) to catch the failure rate.
+        //
+        // Under TOOLTIPTEST_DEVFLOW=1, skip the auto-cycle-and-shutdown behavior entirely: open the
+        // toolbar combo once and leave it open indefinitely, so an external DevFlow client can poll
+        // /api/v1/ui/elements at its own pace instead of racing a fixed timer.
+        var devFlowHoldOpenMode = Environment.GetEnvironmentVariable("TOOLTIPTEST_DEVFLOW") == "1";
+        const int cyclesPerCombo = 15;
+        Loaded += (s, e) =>
+        {
+            Log("COMBO_POPUP_MODE_READY");
+
+            if (devFlowHoldOpenMode)
+            {
+                var target = Environment.GetEnvironmentVariable("TOOLTIPTEST_COMBO_TARGET");
+                if (string.Equals(target, "document", StringComparison.OrdinalIgnoreCase))
+                {
+                    documentComboBox.IsDropDownOpen = true;
+                    Log("COMBO_POPUP_MODE_HOLD_OPEN document dropdown opened and held; not auto-cycling");
+                }
+                else
+                {
+                    ToolbarComboBox.IsDropDownOpen = true;
+                    Log("COMBO_POPUP_MODE_HOLD_OPEN toolbar dropdown opened and held; not auto-cycling");
+                }
+                return;
+            }
+
+            void RunCycles(ComboBox combo, string label, Action next)
+            {
+                var count = 0;
+                var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+                var closing = false;
+                timer.Tick += (ts, te) =>
+                {
+                    if (!closing)
+                    {
+                        closing = true;
+                        combo.IsDropDownOpen = true;
+                    }
+                    else
+                    {
+                        closing = false;
+                        combo.IsDropDownOpen = false;
+                        count++;
+                        if (count >= cyclesPerCombo)
+                        {
+                            timer.Stop();
+                            next();
+                        }
+                    }
+                };
+                timer.Start();
+            }
+
+            void StartDocumentCycles()
+            {
+                if (!documentComboBox.IsLoaded || PresentationSource.FromVisual(documentComboBox) == null)
+                {
+                    Dispatcher.BeginInvoke(new Action(StartDocumentCycles), System.Windows.Threading.DispatcherPriority.Background);
+                    return;
+                }
+                RunCycles(documentComboBox, "Document", () =>
+                {
+                    Log("COMBO_POPUP_MODE_DONE");
+                    Application.Current.Shutdown();
+                });
+            }
+
+            RunCycles(ToolbarComboBox, "Toolbar", StartDocumentCycles);
+        };
+    }
+
+    void LogComboPopupPosition(ComboBox comboBox, string label)
+    {
+        if (PresentationSource.FromVisual(comboBox) == null)
+        {
+            Log($"{label} ComboBox DropDownOpened but combo box is not yet connected to a PresentationSource (skipping this cycle)");
+            return;
+        }
+        Point comboScreen = comboBox.PointToScreen(new Point(0, 0));
+        string popupInfo = "not-found";
+        if (comboBox.Template?.FindName("PART_Popup", comboBox) is Popup popup && popup.Child is FrameworkElement popupChild
+            && PresentationSource.FromVisual(popupChild) != null)
+        {
+            Point popupScreen = popupChild.PointToScreen(new Point(0, 0));
+            double expectedX = comboScreen.X;
+            double expectedY = comboScreen.Y + comboBox.ActualHeight;
+            double offsetX = popupScreen.X - expectedX;
+            double offsetY = popupScreen.Y - expectedY;
+            var flag = (Math.Abs(offsetX) > 5 || Math.Abs(offsetY) > 5) ? " *** MISPOSITIONED ***" : "";
+            popupInfo = $"popupScreen={popupScreen.X:0.0},{popupScreen.Y:0.0} expected={expectedX:0.0},{expectedY:0.0} offset={offsetX:0.0},{offsetY:0.0}{flag}";
+        }
+        Log($"{label} ComboBox DropDownOpened comboScreen={comboScreen.X:0.0},{comboScreen.Y:0.0} {popupInfo}");
     }
 
     static void DumpDescendantTypes(DependencyObject root, System.Collections.Generic.List<string> acc, int depth)
