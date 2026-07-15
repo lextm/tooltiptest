@@ -5,9 +5,15 @@
     <UseWPF>true</UseWPF>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <UseNuGetPackages>true</UseNuGetPackages>
   </PropertyGroup>
-  <ItemGroup>
+  <ItemGroup Condition="'$(UseNuGetPackages)' == 'true'">
+    <PackageReference Include="LeXtudio.DevFlow.Agent.LibreWpf" Version="0.2.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseNuGetPackages)' != 'true'">
     <ProjectReference Include="../wpf-labs/src/DevFlow/LeXtudio.DevFlow.Agent.WPF/LeXtudio.DevFlow.Agent.WPF.csproj" />
-    <ProjectReference Include="../OpenDevelop/src/Libraries/AvalonDock/source/Components/AvalonDock/AvalonDock.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="./external/AvalonDock/source/Components/AvalonDock/AvalonDock.csproj" />
   </ItemGroup>
 </Project>

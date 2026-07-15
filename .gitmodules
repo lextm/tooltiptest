@@ -1,0 +1,3 @@
+[submodule "external/AvalonDock"]
+	path = external/AvalonDock
+	url = https://github.com/lextudio/AvalonDock
