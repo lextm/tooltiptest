@@ -4,7 +4,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../src/tooltiptest" && pwd)"
 LOG_FILE="/tmp/tooltiptest_debug.log"
 STDOUT_FILE="/tmp/tooltiptest_stdout.log"
 DEVFLOW_URL="http://127.0.0.1:9523"

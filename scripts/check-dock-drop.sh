@@ -11,7 +11,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../src/tooltiptest" && pwd)"
 LOG_FILE="/tmp/tooltiptest_debug.log"
 
 rm -f "$LOG_FILE"
